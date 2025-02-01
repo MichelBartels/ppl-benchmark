@@ -1,7 +1,4 @@
 import torch
-import torch.nn as nn
-from pyro.contrib.examples.util import get_data_loader
-
 import pyro
 import pyro.distributions as dist
 from pyro.infer import SVI, JitTrace_ELBO
@@ -9,125 +6,81 @@ from pyro.optim import AdamW
 
 from mnist import mnist_bar
 
+latent_dim = 16
 
-# define the PyTorch module that parameterizes the
-# diagonal gaussian distribution q(z|x)
-class Encoder(nn.Module):
-    def __init__(self, z_dim, hidden_dim):
-        super().__init__()
-        self.hidden = nn.Linear(784, hidden_dim)
-        self.mean = nn.Linear(hidden_dim, z_dim)
-        self.log_var = nn.Linear(hidden_dim, z_dim)
+def linear_init(in_features, out_features, name):
+    pyro.sample(name + ".weight", dist.Normal(0., 0.001).expand([in_features, out_features]).to_event(2))
+    pyro.sample(name + ".bias", dist.Normal(0., 0.001).expand([out_features]).to_event(1))
 
-    def forward(self, x):
-        hidden = torch.tanh(self.hidden(x))
-        z_mean = self.mean(hidden)
-        z_log_var = self.log_var(hidden)
-        return z_mean, z_log_var
+def linear_params(x, in_features, out_features, name):
+    weight_mean = pyro.param(name + ".weight.mean", torch.zeros(in_features, out_features))
+    weight_std = pyro.param(name + ".weight.std", torch.ones(in_features, out_features) * 0.001)
+    weight = pyro.sample(name + ".weight", dist.Normal(weight_mean, weight_std).to_event(2))
+    bias_mean = pyro.param(name + ".bias.mean", torch.zeros(out_features))
+    bias_std = pyro.param(name + ".bias.std", torch.ones(out_features))
+    bias = pyro.sample(name + ".bias", dist.Normal(bias_mean, bias_std).to_event(1))
+    return x @ weight + bias
 
+def linear_params_init(in_features, out_features, name):
+    weight_mean = pyro.param(name + ".weight.mean", torch.zeros(in_features, out_features))
+    weight_std = pyro.param(name + ".weight.std", torch.ones(in_features, out_features) * 0.001)
+    pyro.sample(name + ".weight", dist.Normal(weight_mean, weight_std).to_event(2))
+    bias_mean = pyro.param(name + ".bias.mean", torch.zeros(out_features))
+    bias_std = pyro.param(name + ".bias.std", torch.ones(out_features))
+    pyro.sample(name + ".bias", dist.Normal(bias_mean, bias_std).to_event(1))
 
-# define the PyTorch module that parameterizes the
-# observation likelihood p(x|z)
-class Decoder(nn.Module):
-    def __init__(self, z_dim, hidden_dim):
-        super().__init__()
-        # setup the two linear transformations used
-        self.hidden = nn.Linear(z_dim, hidden_dim)
-        self.output = nn.Linear(hidden_dim, 784)
-
-    def forward(self, z):
-        # define the forward computation on the latent z
-        # first compute the hidden units
-        hidden = torch.tanh(self.hidden(z))
-        # return the parameter for the output Bernoulli
-        # each is of size batch_size x 784
-        img = torch.sigmoid(self.output(hidden))
-        return img
+def linear(x, in_features, out_features, name):
+    weight = pyro.sample(name + ".weight", dist.Normal(0., 1.).expand([in_features, out_features]).to_event(2))
+    bias = pyro.sample(name + ".bias", dist.Normal(0., 1.).expand([out_features]).to_event(1))
+    return x @ weight + bias
 
 
-# define a PyTorch module for the VAE
-class VAE(nn.Module):
-    # by default our latent space is 50-dimensional
-    # and we use 400 hidden units
-    def __init__(self, z_dim=16, hidden_dim=512, use_cuda=False):
-        super().__init__()
-        # create the encoder and decoder networks
-        self.encoder = Encoder(z_dim, hidden_dim)
-        self.decoder = Decoder(z_dim, hidden_dim)
+def encoder_init():
+    linear_init(784, 512, "encoder.hidden")
+    linear_init(512, latent_dim, "encoder.mean")
+    linear_init(512, latent_dim, "encoder.log_var")
 
-        if use_cuda:
-            # calling cuda() here will put all the parameters of
-            # the encoder and decoder networks into gpu memory
-            self.cuda()
-        self.use_cuda = use_cuda
-        self.z_dim = z_dim
+def encoder_params(x):
+    x = linear_params(x, 784, 512, "encoder.hidden")
+    mean = linear_params(x, 512, latent_dim, "encoder.mean")
+    log_var = linear_params(x, 512, latent_dim, "encoder.log_var")
+    return mean, log_var
 
-    # define the model p(x|z)p(z)
-    def model(self, x):
-        # register PyTorch module `decoder` with Pyro
-        pyro.module("decoder", self.decoder)
-        with pyro.plate("data", x.shape[0]):
-            # setup hyperparameters for prior p(z)
-            z_loc = torch.zeros(x.shape[0], self.z_dim, dtype=x.dtype, device=x.device)
-            z_scale = torch.ones(x.shape[0], self.z_dim, dtype=x.dtype, device=x.device)
-            # sample from prior (value will be sampled by guide when computing the ELBO)
-            z = pyro.sample("latent", dist.Normal(z_loc, z_scale).to_event(1))
-            # decode the latent code z
-            loc_img = self.decoder.forward(z)
-            # score against actual images (with relaxed Bernoulli values)
-            pyro.sample(
-                "obs",
-                dist.Normal(loc_img, 1, validate_args=False).to_event(1),
-                obs=x.reshape(-1, 784),
-            )
-            # return the loc so we can visualize it later
-            return loc_img
+def decoder_params_init():
+    linear_init(latent_dim, 512, "decoder.hidden")
+    linear_init(512, 784, "decoder.output")
 
-    # define the guide (i.e. variational distribution) q(z|x)
-    def guide(self, x):
-        # register PyTorch module `encoder` with Pyro
-        pyro.module("encoder", self.encoder)
-        with pyro.plate("data", x.shape[0]):
-            # use the encoder to get the parameters used to define q(z|x)
-            z_mean, z_log_var = self.encoder.forward(x)
-            # sample the latent code z
-            pyro.sample("latent", dist.Normal(z_mean, torch.exp(z_log_var)).to_event(1))
+def decoder(z):
+    hidden = torch.tanh(linear(z, 784, 512, "decoder.hidden"))
+    img = torch.sigmoid(linear(hidden, 512, 784, "decoder.output"))
+    return img
 
-    # define a helper function for reconstructing images
-    def reconstruct_img(self, x):
-        # encode image x
-        z_loc, z_scale = self.encoder(x)
-        # sample in latent space
-        z = dist.Normal(z_loc, z_scale).sample()
-        # decode the image (note we don't sample in image space)
-        loc_img = self.decoder(z)
-        return loc_img
+def model(x):
+    with pyro.plate("data", x.shape[0]):
+        encoder_init()
+        z_loc = torch.zeros(x.shape[0], latent_dim)
+        z_scale = torch.ones(x.shape[0], latent_dim)
+        z = pyro.sample("latent", dist.Normal(z_loc, z_scale).to_event(1))
+        loc_img = decoder(z)
+        pyro.sample("obs", dist.Normal(loc_img, 1.).to_event(1), obs=x)
 
+def guide(x):
+    with pyro.plate("data", x.shape[0]):
+        decoder_params_init()
+        mean, log_var = encoder_params(x)
+        var = torch.exp(log_var)
+        print("guide", mean.shape, var.shape)
+        pyro.sample("latent", dist.Normal(mean, var).to_event(1))
 
-if __name__ == "__main__":
-    # clear param store
-    pyro.clear_param_store()
+optimizer = AdamW({"lr": 1.0e-4})
 
-    train_loader = get_data_loader("MNIST", "data", batch_size=256)
+elbo = JitTrace_ELBO()
+svi = SVI(model, guide, optimizer, loss=elbo)
 
-    test_loader = get_data_loader("MNIST", "data", batch_size=256, is_training_set=False)
-    #
-    # setup the VAE
-    vae = VAE(use_cuda=False)
+update_loss, mnist = mnist_bar()
 
-    # setup the optimizer
-    adam_args = {"lr": 0.0001}
-    optimizer = AdamW(adam_args)
-
-    # setup the inference algorithm
-    elbo = JitTrace_ELBO()
-    svi = SVI(vae.model, vae.guide, optimizer, loss=elbo)
-
-    update_loss, mnist = mnist_bar()
-
-    for x in mnist():
-        if False:
-            x = x.cuda()
-        # do ELBO gradient and accumulate loss
-        loss = svi.step(x)
-        update_loss(loss)
+for x in mnist():
+    if False:
+        x = x.cuda()
+    loss = svi.step(x)
+    update_loss(loss)
