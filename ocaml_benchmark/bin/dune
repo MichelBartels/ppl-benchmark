@@ -1,0 +1,4 @@
+(executable
+ (public_name ocaml_benchmark)
+ (name main)
+ (libraries ocaml_benchmark iree_bindings pjrt_bindings core base yojson))
