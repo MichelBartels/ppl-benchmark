@@ -3,7 +3,7 @@ open Dsl
 
 module Device =
   ( val Pjrt_bindings.make
-          "/home/michel/part-ii-project/xla/bazel-bin/xla/pjrt/c/pjrt_c_api_cpu_plugin.so"
+          "/home/michel/part-ii-project/xla/bazel-bin/xla/pjrt/c/pjrt_c_api_gpu_plugin.so"
     )
 
 module Runtime = Runtime.Make (Device)
@@ -15,9 +15,10 @@ let benchmark_fn f size =
     let y = f [] in
     ignore @@ DeviceValue.to_host_value y
 
-let uniform = benchmark_fn (uniform ~.0. ~.1.)
+(* let uniform = benchmark_fn (uniform ~.0. ~.1.) *)
+let uniform = benchmark_fn Random.uniform_f32
 
-let normal = benchmark_fn (norm ~.0. ~.1.)
+let normal = benchmark_fn Random.normal_f32
 
 module Result = struct
   type t = {times: float list}
@@ -76,7 +77,7 @@ let rec range start stop step =
   if start >= stop then [] else start :: range (start + step) stop step
 
 let sizes =
-  range (Base.Int.pow 2 24) (Base.Int.pow 2 27 + 1) (Base.Int.pow 2 24)
+  range (Base.Int.pow 2 26) (Base.Int.pow 2 29 + 1) (Base.Int.pow 2 26)
 
 let () =
   let grid = benchmark_grid uniform "This implementation" sizes 100 1000 in
