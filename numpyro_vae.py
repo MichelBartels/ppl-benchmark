@@ -5,9 +5,7 @@ from numpyro.optim import Adam
 
 from jax import jit
 import jax.numpy as jnp
-from jax.random import PRNGKey, split
-
-from mnist import mnist_bar, batch_size
+from jax.random import PRNGKey
 
 latent_dim = 16
 
@@ -82,21 +80,25 @@ def guide(x):
         var = jnp.exp(log_var)
         numpyro.sample("latent", Normal(mean, var).to_event(1))
 
-optimizer = Adam(1.0e-4)
 
-svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
+def step_fn(batch_size):
+    optimizer = Adam(1.0e-4)
 
-rng_key = PRNGKey(0)
+    svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
 
-sample_batch = jnp.zeros((batch_size, 784))
+    rng_key = PRNGKey(0)
 
-svi_state = svi.init(rng_key, sample_batch)
+    sample_batch = jnp.zeros((batch_size, 784))
 
-step = jit(svi.update)
+    svi_state = svi.init(rng_key, sample_batch)
 
-update_loss, mnist = mnist_bar()
+    update = jit(svi.update)
 
-for x in mnist():
-    x = x.numpy()
-    svi_state, loss = step(svi_state, x)
-    update_loss(loss)
+    def step(x):
+        nonlocal svi_state
+        svi_state, loss = update(svi_state, x)
+        return loss
+    return step
+
+def prepare_batch(batch):
+    return jnp.array(batch.numpy(), dtype=jnp.float32)
