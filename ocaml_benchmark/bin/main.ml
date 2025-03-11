@@ -18,6 +18,8 @@ open Runtime
 
 (* let normal = benchmark_fn Random.normal_f32 *)
 
+let () = Printexc.record_backtrace true
+
 module Result = struct
   type t = {times: float list}
 
@@ -63,6 +65,7 @@ let benchmark_grid f label values n_warmup n_bench =
   let results =
     List.fold_left
       (fun acc value ->
+        print_endline @@ Printf.sprintf "Benchmarking %d" value ;
         let f = f value in
         let times = benchmark f n_warmup n_bench in
         StringMap.add (string_of_int value) times acc )
@@ -138,8 +141,8 @@ let train_step_without_loading batch_size =
     |> DeviceValue.of_host_value |> ref
   in
   let batch = one_sample batch_size in
-  let batch = DeviceValue.of_host_value @@ E batch in
   fun () ->
+    let batch = DeviceValue.of_host_value @@ E batch in
     let [loss; params'] = train_step [!params; batch] in
     params := params' ;
     ignore @@ DeviceValue.to_host_value loss
