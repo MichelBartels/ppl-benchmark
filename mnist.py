@@ -15,7 +15,7 @@ def cycle(loader):
             yield x
 
 def mnist(batch_size):
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=8, pin_memory=True)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=8)
     for x, y in cycle(loader):
         x = x.reshape(x.shape[0], -1)
         y = one_hot(y, 10)
