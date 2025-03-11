@@ -78,14 +78,14 @@ def guide(x):
         var = torch.exp(log_var)
         pyro.sample("latent", Normal(mean, var).to_event(1))
 
-optimizer = AdamW({"lr": 1.0e-4})
+def step_fn(batch_size):
+    pyro.clear_param_store()
+    optimizer = AdamW({"lr": 1.0e-4})
 
-elbo = JitTrace_ELBO()
-svi = SVI(model, guide, optimizer, loss=elbo)
+    elbo = JitTrace_ELBO()
+    svi = SVI(model, guide, optimizer, loss=elbo)
 
-update_loss, mnist = mnist_bar()
+    return svi.step
 
-for x in mnist():
-    x = x.to(device)
-    loss = svi.step(x)
-    update_loss(loss)
+def prepare_batch(x):
+    return x.to(device)

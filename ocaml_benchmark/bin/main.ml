@@ -1,23 +1,23 @@
 open Iree_bindings
-(* open Dsl *)
+open Dsl
 
-(*module Device =
+module Device =
   ( val Pjrt_bindings.make
           "/home/michel/part-ii-project/xla/bazel-bin/xla/pjrt/c/pjrt_c_api_gpu_plugin.so"
     )
 
 module Runtime = Runtime.Make (Device)
-open Runtime *)
+open Runtime
 
-(* let benchmark_fn f size =
+let benchmark_fn f size =
   let f = compile [] @@ fun Ir.Var.List.[] -> E (mean [0] @@ f [size]) in
   fun () ->
     let y = f [] in
-    ignore @@ DeviceValue.to_host_value y *)
+    ignore @@ DeviceValue.to_host_value y
 
-(* let uniform = benchmark_fn Random.uniform_f32 *)
+let uniform = benchmark_fn Random.uniform_f32
 
-(* let normal = benchmark_fn Random.normal_f32 *)
+let normal = benchmark_fn Random.normal_f32
 
 module Result = struct
   type t = {times: float list}
@@ -74,16 +74,16 @@ let benchmark_grid f label values n_warmup n_bench =
 let rec range start stop step =
   if start >= stop then [] else start :: range (start + step) stop step
 
-(* let sizes = *)
-(*   range (Base.Int.pow 2 26) (Base.Int.pow 2 29 + 1) (Base.Int.pow 2 26) *)
+let sizes =
+  range (Base.Int.pow 2 26) (Base.Int.pow 2 29 + 1) (Base.Int.pow 2 26)
 
-(* let () = *)
-(*   let grid = benchmark_grid uniform "This implementation" sizes 100 1000 in *)
-(*   Grid.save grid "uniform.json" ; *)
-(*   let grid = benchmark_grid normal "This implementation" sizes 100 1000 in *)
-(*   Grid.save grid "normal.json" *)
+let () =
+  let grid = benchmark_grid uniform "This implementation" sizes 100 1000 in
+  Grid.save grid "uniform.json" ;
+  let grid = benchmark_grid normal "This implementation" sizes 100 1000 in
+  Grid.save grid "normal.json"
 
-let mnist batch_size =
+(*let mnist batch_size =
   let dataset = Mnist.load_images Train in
   let dataset = Dataset.shuffle dataset in
   let dataset = Dataset.batch_tensors batch_size dataset in
@@ -102,4 +102,4 @@ let sizes = range 64 (512 + 1) 64
 
 let () =
   let grid = benchmark_grid mnist "MNIST" sizes 100 1000 in
-  Grid.save grid "mnist.json"
+  Grid.save grid "mnist.json"*)

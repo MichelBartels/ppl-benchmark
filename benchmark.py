@@ -18,11 +18,11 @@ class Result:
         interval_sizes = sorted_times[:-num_elements_in_interval + 1] - sorted_times[num_elements_in_interval - 1:]
         smallest_interval_start = np.argmin(interval_sizes)
         smallest_interval_end = smallest_interval_start + num_elements_in_interval - 1
-        interval = np.array(self.mean() - sorted_times[smallest_interval_start], sorted_times[smallest_interval_end] - self.mean())
+        interval = np.array([self.mean() - sorted_times[smallest_interval_start], sorted_times[smallest_interval_end] - self.mean()])
         return interval
 
     def to_list(self):
-        return list(self.times)
+        return self.times.tolist()
 
     @staticmethod
     def from_list(d):
@@ -44,26 +44,27 @@ class Grid:
     label: str
 
     def xs(self):
-        return np.array(list(self.results.keys()))
+        return np.sort(np.array(list(self.results.keys())))
 
     def ys(self):
         return np.array([self.results[x].mean() for x in self.xs()])
 
     def confidence_intervals(self, interval):
-        return np.stack([self.results[x].confidence_interval(interval) for x in self.xs()])
+        return np.stack([self.results[x].confidence_interval(interval) for x in self.xs()]).T
 
     def plot(self, interval=0.95):
         xs = self.xs()
         ys = self.ys()
         confidence_intervals = self.confidence_intervals(interval)
-        plt.errorbar(xs, ys, yerr=confidence_intervals, label=self.label)
+        print(confidence_intervals.shape)
+        plt.errorbar(xs, ys, yerr=confidence_intervals, label=self.label, alpha=0.5)
 
     def to_dict(self):
         return {"label": self.label, "results": {k: v.to_list() for k, v in self.results.items()}}
 
     @staticmethod
     def from_dict(d):
-        return Grid({k: Result.from_list(v) for k, v in d["results"].items()}, d["label"])
+        return Grid({int(k): Result.from_list(v) for k, v in d["results"].items()}, d["label"])
 
     def save_json(self, filename):
         with open(filename, "w") as f:
