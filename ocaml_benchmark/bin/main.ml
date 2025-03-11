@@ -27,7 +27,7 @@ end
 
 let benchmark f n_warmup n_bench =
   for _ = 1 to n_warmup do
-    ignore @@ f
+    ignore @@ f ()
   done ;
   let times =
     List.init n_bench (fun _ ->
@@ -64,7 +64,6 @@ let benchmark_grid f label values n_warmup n_bench =
   let results =
     List.fold_left
       (fun acc value ->
-        print_int value ;
         let f = f value in
         let times = benchmark f n_warmup n_bench in
         StringMap.add (string_of_int value) times acc )
