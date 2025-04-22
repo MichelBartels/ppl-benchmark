@@ -1,104 +1,125 @@
 import numpyro
-from numpyro.distributions import Normal
-from numpyro.infer import SVI, Trace_ELBO
+from numpyro.distributions import Normal, Bernoulli # Added Bernoulli just in case
+from numpyro.infer import SVI, Trace_ELBO, Predictive
 from numpyro.optim import Adam
+from numpyro.distributions.constraints import positive
 
-from jax import jit
+from jax import jit, debug
+from jax.nn import softplus
 import jax.numpy as jnp
-from jax.random import PRNGKey
+from jax.random import PRNGKey, normal
 
 latent_dim = 16
+hidden_dim_enc = 512
+hidden_dim_dec = 512
+input_dim = 784
 
-def linear_init(in_features, out_features, name):
-    numpyro.sample(name + ".weight", Normal(0., 0.001).expand([in_features, out_features]).to_event(2))
-    numpyro.sample(name + ".bias", Normal(0., 0.001).expand([1, out_features]).to_event(2))
+def linear_params(in_features, out_features, name):
+    weight_mean = numpyro.param(f"{name}.weight.mean", jnp.zeros((in_features, out_features)))
+    weight_std = numpyro.param(f"{name}.weight.std_inv_softplus", jnp.full((in_features, out_features), 0.01), constraint=positive)
 
-def linear_params(x, in_features, out_features, name):
-    weight_mean = numpyro.param(name + ".weight.mean", jnp.zeros((in_features, out_features)))
-    weight_std = numpyro.param(name + ".weight.std", jnp.ones((in_features, out_features)) * 0.001)
-    weight = numpyro.sample(name + ".weight", Normal(weight_mean, weight_std).to_event(2))
-    bias_mean = numpyro.param(name + ".bias.mean", jnp.zeros((1, out_features)))
-    bias_std = numpyro.param(name + ".bias.std", jnp.ones((1, out_features)))
-    bias = numpyro.sample(name + ".bias", Normal(bias_mean, bias_std).to_event(2))
+    numpyro.sample(f"{name}.weight", Normal(weight_mean, weight_std).to_event(2))
+
+    bias_mean = numpyro.param(f"{name}.bias.mean", jnp.zeros((1, out_features)))
+    bias_std = numpyro.param(f"{name}.bias.std_inv_softplus", jnp.full((1, out_features), 0.01), constraint=positive)
+
+    numpyro.sample(f"{name}.bias", Normal(bias_mean, bias_std).to_event(2))
+
+def linear(x, in_features, out_features, name, bayesian=True):
+    if bayesian:
+        weight = numpyro.sample(f"{name}.weight", Normal(0., 0.01).expand([in_features, out_features]).to_event(2))
+        bias = numpyro.sample(f"{name}.bias", Normal(0., 0.01).expand([1, out_features]).to_event(2))
+    else:
+        weight = numpyro.param(f"{name}.weight", lambda key: normal(key, shape=(in_features, out_features)) * 0.01)
+        bias = numpyro.param(f"{name}.bias", lambda key: normal(key, shape=(1, out_features)) * 0.01)
     return x @ weight + bias
 
-def linear_params_init(in_features, out_features, name):
-    weight_mean = numpyro.param(name + ".weight.mean", jnp.zeros((in_features, out_features)))
-    weight_std = numpyro.param(name + ".weight.std", jnp.ones((in_features, out_features)) * 0.001)
-    numpyro.sample(name + ".weight", Normal(weight_mean, weight_std).to_event(2))
-    bias_mean = numpyro.param(name + ".bias.mean", jnp.zeros((1, out_features)))
-    bias_std = numpyro.param(name + ".bias.std", jnp.ones((1, out_features)))
-    numpyro.sample(name + ".bias", Normal(bias_mean, bias_std).to_event(2))
-
-def linear(x, in_features, out_features, name):
-    weight = numpyro.sample(name + ".weight", Normal(0., 1.).expand([in_features, out_features]).to_event(2))
-    bias = numpyro.sample(name + ".bias", Normal(0., 1.).expand([1, out_features]).to_event(2))
-    return x @ weight + bias
-
-
-def encoder_init():
-    linear_init(784, 512, "encoder.hidden")
-    linear_init(512, latent_dim, "encoder.mean")
-    linear_init(512, latent_dim, "encoder.log_var")
-
-def encoder_params(x):
-    x = linear_params(x, 784, 512, "encoder.hidden")
-    mean = linear_params(x, 512, latent_dim, "encoder.mean")
-    log_var = linear_params(x, 512, latent_dim, "encoder.log_var")
+def encoder(x):
+    hidden = jnp.tanh(linear(x[:, None], input_dim, hidden_dim_enc, "encoder.hidden", bayesian=False))
+    mean = linear(hidden, hidden_dim_enc, latent_dim, "encoder.mean", bayesian=False)
+    log_var = linear(hidden, hidden_dim_enc, latent_dim, "encoder.log_var", bayesian=False)
     return mean, log_var
-
-def decoder_params_init():
-    linear_init(latent_dim, 512, "decoder.hidden")
-    linear_init(512, 784, "decoder.output")
 
 def sigmoid(x):
     return 1 / (1 + jnp.exp(-x))
 
-def decoder(z):
-    hidden = jnp.tanh(linear(z, latent_dim, 512, "decoder.hidden"))
-    img = sigmoid(linear(hidden, 512, 784, "decoder.output"))
-    return img
+def decoder_generative(z):
+    hidden = jnp.tanh(linear(z, latent_dim, hidden_dim_dec, "decoder.hidden"))
+    output_mean = sigmoid(linear(hidden, hidden_dim_dec, input_dim, "decoder.output") * 100)
+    return output_mean
 
-def model(x):
-    with numpyro.plate("data", x.shape[0]):
-        encoder_init()
-        z_loc = jnp.zeros((x.shape[0], latent_dim))
-        z_scale = jnp.ones((x.shape[0], latent_dim))
+def decoder_guide():
+    linear_params(latent_dim, hidden_dim_dec, "decoder.hidden")
+    linear_params(hidden_dim_dec, input_dim, "decoder.output")
+
+
+def model(x, observed):
+    batch_size = x.shape[0] if x is not None else 1
+
+    with numpyro.plate("data", batch_size):
+        z_loc = jnp.zeros((latent_dim,))
+        z_scale = jnp.ones((latent_dim))
         z = numpyro.sample("latent", Normal(z_loc, z_scale).to_event(1))
-        z = jnp.expand_dims(z, 1)
-        loc_img = decoder(z)
-        loc_img = loc_img.squeeze(1)
-        numpyro.sample("obs", Normal(loc_img, 1.).to_event(1), obs=x)
+        #debug.print("z mean: {mean} std: {std}", mean=z.mean(), std=z.std())
 
-def guide(x):
-    with numpyro.plate("data", x.shape[0]):
-        decoder_params_init()
-        x = jnp.expand_dims(x, 1)
-        mean, log_var = encoder_params(x)
-        mean = mean.squeeze(1)
-        log_var = log_var.squeeze(1)
-        var = jnp.exp(log_var)
-        numpyro.sample("latent", Normal(mean, var).to_event(1))
+        loc_img = decoder_generative(z[:, None])
+        scale_img = 0.1
+        if observed is None:
+            numpyro.sample("obs", Normal(loc_img, scale_img).to_event(1))
+            return
+        #debug.print("Image mean: {mean} std: {std}", mean=loc_img.mean(), std=loc_img.std())
+        #debug.print("Image diff: {mean} std: {std}", mean=(loc_img - x).mean(), std=(loc_img - x).std())
+        numpyro.sample("obs", Normal(loc_img, scale_img).to_event(1), obs=observed)
 
 
-def step_fn(batch_size):
-    optimizer = Adam(1.0e-4)
+def guide(x, observed):
+    if x is None:
+        decoder_guide()
+        return
+    batch_size = x.shape[0]
 
+    with numpyro.plate("data", batch_size):
+        mean_z, inv_std_z = encoder(x)
+        std_z = softplus(inv_std_z) / jnp.log(2)
+
+        mean_z = jnp.reshape(mean_z, (batch_size, latent_dim))
+        std_z = jnp.reshape(std_z, (batch_size, latent_dim)) / 0.67
+
+        numpyro.sample("latent", Normal(mean_z, std_z).to_event(1))
+
+        decoder_guide()
+
+
+def prepare_batch(batch):
+    batch = jnp.reshape(batch.numpy(), (batch.shape[0], -1)) # Flatten
+    return batch
+
+
+def init(batch_size, learning_rate=1e-3):
+    optimizer = Adam(learning_rate)
     svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
 
-    rng_key = PRNGKey(0)
-
-    sample_batch = jnp.zeros((batch_size, 784))
-
-    svi_state = svi.init(rng_key, sample_batch)
+    rng_key_init = PRNGKey(0)
+    dummy_prepared_batch = jnp.zeros((batch_size, input_dim))
+    svi_state = svi.init(rng_key_init, dummy_prepared_batch, dummy_prepared_batch)
 
     update = jit(svi.update)
 
-    def step(x):
+    def step(prepared_batch):
         nonlocal svi_state
-        svi_state, loss = update(svi_state, x)
+        svi_state, loss = update(svi_state, x=prepared_batch, observed=prepared_batch)
         return loss
-    return step
 
-def prepare_batch(batch):
-    return jnp.array(batch.numpy(), dtype=jnp.float32)
+    def generate(num_samples):
+        params = svi.get_params(svi_state)
+        predictive_model = Predictive(model, guide=guide, num_samples=num_samples, params=params)
+        generated_samples = predictive_model(PRNGKey(0), x=None, observed=None)
+        return generated_samples['obs']
+
+    def reconstruct(prepared_batch):
+        params = svi.get_params(svi_state)
+        predictive_model = Predictive(model, guide=guide, num_samples=1, params=params)
+        reconstructed_samples = predictive_model(PRNGKey(0), x=prepared_batch, observed=None)
+        return reconstructed_samples['obs']
+
+    return step, generate, reconstruct
