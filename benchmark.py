@@ -9,16 +9,16 @@ import mpl_typst
 class Result:
     times: np.ndarray
 
-    def mean(self):
-        return np.mean(self.times)
+    def median(self):
+        return np.median(self.times)
 
     def confidence_interval(self, interval):
         sorted_times = np.sort(self.times)
         num_elements_in_interval = int(len(sorted_times) * interval)
-        interval_sizes = sorted_times[:-num_elements_in_interval + 1] - sorted_times[num_elements_in_interval - 1:]
+        interval_sizes = sorted_times[num_elements_in_interval - 1:] - sorted_times[:-num_elements_in_interval + 1]
         smallest_interval_start = np.argmin(interval_sizes)
         smallest_interval_end = smallest_interval_start + num_elements_in_interval - 1
-        interval = np.array([self.mean() - sorted_times[smallest_interval_start], sorted_times[smallest_interval_end] - self.mean()])
+        interval = np.array([self.median() - sorted_times[smallest_interval_start], sorted_times[smallest_interval_end] - self.median()])
         return interval
 
     def to_list(self):
@@ -38,6 +38,9 @@ class Result:
             times = json.load(f)
         return Result.from_list(times)
 
+    def scale(self, factor):
+        return Result(times=self.times * factor)
+
 @dataclass(frozen=True)
 class Grid:
     results: dict[int, Result]
@@ -47,7 +50,7 @@ class Grid:
         return np.sort(np.array(list(self.results.keys())))
 
     def ys(self):
-        return np.array([self.results[x].mean() for x in self.xs()])
+        return np.array([self.results[x].median() for x in self.xs()])
 
     def confidence_intervals(self, interval):
         return np.stack([self.results[x].confidence_interval(interval) for x in self.xs()]).T
@@ -76,12 +79,14 @@ class Grid:
             grid = json.load(f)
         return Grid.from_dict(grid)
 
+    def scale(self, factor):
+        return Grid({k: v.scale(factor) for k, v in self.results.items()}, label=self.label)
+
 @dataclass(frozen=True)
 class Plot:
     grids: list[Grid]
     xlabel: str
     ylabel: str
-    title: str
 
     def plot(self, filename, interval=0.95):
         for grid in self.grids:
@@ -89,7 +94,20 @@ class Plot:
         plt.legend()
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
-        plt.title(self.title)
+        plt.savefig(filename)
+        plt.clf()
+
+@dataclass(frozen=True)
+class Bar:
+    results: dict[str, Result]
+    label: str
+
+    def plot(self, filename, interval=0.95):
+        labels = list(self.results.keys())
+        ys = np.array([self.results[k].median() for k in labels])
+        confidence_intervals = np.stack([self.results[k].confidence_interval(interval) for k in labels]).T
+        plt.bar(labels, ys, yerr=confidence_intervals, label=self.results.keys(), alpha=0.5)
+        plt.ylabel(self.label)
         plt.savefig(filename)
         plt.clf()
 

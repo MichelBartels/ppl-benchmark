@@ -1,10 +1,10 @@
 import numpyro
-from numpyro.distributions import Normal, Bernoulli # Added Bernoulli just in case
+from numpyro.distributions import Normal, Distribution
 from numpyro.infer import SVI, Trace_ELBO, Predictive
 from numpyro.optim import Adam
 from numpyro.distributions.constraints import positive
 
-from jax import jit, debug
+from jax import jit
 from jax.nn import softplus
 import jax.numpy as jnp
 from jax.random import PRNGKey, normal
@@ -52,6 +52,20 @@ def decoder_guide():
     linear_params(latent_dim, hidden_dim_dec, "decoder.hidden")
     linear_params(hidden_dim_dec, input_dim, "decoder.output")
 
+class ContinuousBernoulli(Distribution):
+    def __init__(self, p):
+        self.p = p
+        super().__init__(batch_shape=p.shape, event_shape=())
+
+    def sample(self, key, sample_shape=()):
+        return self.p
+
+    def log_prob(self, x):
+        cut_p = jnp.where(jnp.logical_or(self.p < 0.49, self.p > 0.51), self.p, jnp.full_like(self.p, 0.49))
+        log_norm = jnp.log(jnp.abs(2 * jnp.arctanh(1 - 2 * cut_p))) - jnp.log(jnp.abs(1 - 2 * cut_p))
+        taylor = jnp.log(2) - 4 / 3 * jnp.pow(self.p - 0.5, 2) + 104 / 45 * jnp.pow(self.p - 0.5, 4)
+        c = jnp.where(jnp.logical_or(self.p < 0.49, self.p > 0.51), log_norm, taylor)
+        return c + x * jnp.log(self.p) + (1 - x) * jnp.log(1 - self.p)
 
 def model(x, observed):
     batch_size = x.shape[0] if x is not None else 1
@@ -60,16 +74,15 @@ def model(x, observed):
         z_loc = jnp.zeros((latent_dim,))
         z_scale = jnp.ones((latent_dim))
         z = numpyro.sample("latent", Normal(z_loc, z_scale).to_event(1))
-        #debug.print("z mean: {mean} std: {std}", mean=z.mean(), std=z.std())
 
-        loc_img = decoder_generative(z[:, None])
-        scale_img = 0.1
+        loc_img = decoder_generative(z[:, None])[:, 0]
+        scale_img = 0.01
         if observed is None:
             numpyro.sample("obs", Normal(loc_img, scale_img).to_event(1))
+            #numpyro.sample("obs", ContinuousBernoulli(loc_img).to_event(1))
             return
-        #debug.print("Image mean: {mean} std: {std}", mean=loc_img.mean(), std=loc_img.std())
-        #debug.print("Image diff: {mean} std: {std}", mean=(loc_img - x).mean(), std=(loc_img - x).std())
         numpyro.sample("obs", Normal(loc_img, scale_img).to_event(1), obs=observed)
+        #numpyro.sample("obs", ContinuousBernoulli(loc_img).to_event(1), obs=observed)
 
 
 def guide(x, observed):
