@@ -1,13 +1,14 @@
 import numpyro
 from numpyro.distributions import Normal, Distribution
-from numpyro.infer import SVI, Trace_ELBO, Predictive
-from numpyro.optim import Adam
+from numpyro.infer import SVI, Trace_ELBO, TraceMeanField_ELBO, Predictive
 from numpyro.distributions.constraints import positive
 
-from jax import jit
+from jax import jit, debug
 from jax.nn import softplus
 import jax.numpy as jnp
 from jax.random import PRNGKey, normal
+
+from optax import adamw, sgd
 
 latent_dim = 16
 hidden_dim_enc = 512
@@ -93,10 +94,10 @@ def guide(x, observed):
 
     with numpyro.plate("data", batch_size):
         mean_z, inv_std_z = encoder(x)
-        std_z = softplus(inv_std_z) / jnp.log(2)
+        std_z = jnp.exp(inv_std_z)
 
         mean_z = jnp.reshape(mean_z, (batch_size, latent_dim))
-        std_z = jnp.reshape(std_z, (batch_size, latent_dim)) / 0.67
+        std_z = jnp.reshape(std_z, (batch_size, latent_dim))
 
         numpyro.sample("latent", Normal(mean_z, std_z).to_event(1))
 
@@ -109,10 +110,10 @@ def prepare_batch(batch):
 
 
 def init(batch_size, learning_rate=1e-3):
-    optimizer = Adam(learning_rate)
-    svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
+    optimizer = adamw(learning_rate=learning_rate)
+    svi = SVI(model, guide, optimizer, loss=TraceMeanField_ELBO())
 
-    rng_key_init = PRNGKey(0)
+    rng_key_init = PRNGKey(4)
     dummy_prepared_batch = jnp.zeros((batch_size, input_dim))
     svi_state = svi.init(rng_key_init, dummy_prepared_batch, dummy_prepared_batch)
 
