@@ -1,7 +1,7 @@
 import torch
 import pyro
 from pyro.distributions import Normal
-from pyro.infer import SVI, JitTrace_ELBO
+from pyro.infer import SVI, JitTraceMeanField_ELBO
 from pyro.optim import AdamW
 
 from mnist import mnist_bar
@@ -82,7 +82,7 @@ def step_fn(batch_size):
     pyro.clear_param_store()
     optimizer = AdamW({"lr": 1.0e-4})
 
-    elbo = JitTrace_ELBO()
+    elbo = JitTraceMeanField_ELBO()
     svi = SVI(model, guide, optimizer, loss=elbo)
 
     return svi.step

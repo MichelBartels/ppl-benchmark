@@ -6,9 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "jax[cuda12]>=0.5.0",
+    "kitcat>=1.2.1",
     "matplotlib>=3.10.0",
     "mpl-typst",
     "numpyro>=0.16.1",
+    "optax>=0.2.4",
     "pyro-ppl>=1.9.1",
     "torchvision>=0.21.0",
 ]
