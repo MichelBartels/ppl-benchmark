@@ -17,12 +17,12 @@ input_dim = 784
 
 def linear_params(in_features, out_features, name):
     weight_mean = numpyro.param(f"{name}.weight.mean", jnp.zeros((in_features, out_features)))
-    weight_std = numpyro.param(f"{name}.weight.std_inv_softplus", jnp.full((in_features, out_features), 0.01), constraint=positive)
+    weight_std = numpyro.param(f"{name}.weight.std_inv", jnp.full((in_features, out_features), 0.01), constraint=positive)
 
     numpyro.sample(f"{name}.weight", Normal(weight_mean, weight_std).to_event(2))
 
     bias_mean = numpyro.param(f"{name}.bias.mean", jnp.zeros((1, out_features)))
-    bias_std = numpyro.param(f"{name}.bias.std_inv_softplus", jnp.full((1, out_features), 0.01), constraint=positive)
+    bias_std = numpyro.param(f"{name}.bias.std_inv", jnp.full((1, out_features), 0.01))
 
     numpyro.sample(f"{name}.bias", Normal(bias_mean, bias_std).to_event(2))
 
