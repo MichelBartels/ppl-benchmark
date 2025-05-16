@@ -74,9 +74,11 @@ class Grid:
             json.dump(self.to_dict(), f)
 
     @staticmethod
-    def load_json(filename):
+    def load_json(filename, label=None):
         with open(filename, "r") as f:
             grid = json.load(f)
+        if label is not None:
+            grid["label"] = label
         return Grid.from_dict(grid)
 
     def scale(self, factor):
@@ -87,8 +89,14 @@ class Plot:
     grids: list[Grid]
     xlabel: str
     ylabel: str
+    xlim: tuple[float | None, float | None] = (None, None)
+    ylim: tuple[float | None, float | None] = (None, None)
 
     def plot(self, filename, interval=0.95):
+        left, right = self.xlim
+        plt.xlim(left, right)
+        bottom, top = self.ylim
+        plt.ylim(bottom, top)
         for grid in self.grids:
             grid.plot(interval=interval)
         plt.legend()
